@@ -1,22 +1,35 @@
 TOP := $(patsubst %/,%,$(abspath $(dir $(lastword $(MAKEFILE_LIST)))))
 
-SRC        = $(wildcard $(TOP)/src/*.rs)
-BUILD_DIR  = $(TOP)/target/debug
-TARGET     = $(BUILD_DIR)/libtree_query.so
-LIB        = $(patsubst %libtree_query.so,%tree-query.so, $(TARGET))
+SRC       := $(wildcard $(TOP)/src/*.cc)
+TARGET    ?= target
+RS_DIR     = $(TOP)/tsq
+RS_SRC     = $(wildcard $(RS_DIR)/src/*.rs)
+RS_TARGET  = $(RS_DIR)/target/debug/libtsq.so
+RS_LIB     = $(patsubst %libtsq.so,%tsq.so, $(RS_TARGET))
+LIB        = $(TARGET)/tsmeta.so
+FEATURE   ?= tsmeta
+LOADPATH  ?= $(TARGET)
 
 all:
 	@
 
+tsmeta: $(LIB)
+$(LIB): $(SRC)
+	$(RM) $@
+	mkdir -p target
+	$(CXX) -o $@ -Isrc $^ -shared -fPIC -Os
 
-$(TARGET): $(SRC)
-	@cargo build >/dev/null 2>&1
+emacs: tsmeta
+	@emacs -Q -L $(LOADPATH) --eval "(require '$(FEATURE))"
 
-$(LIB): $(TARGET)
-	@ln -s $(TARGET) $(LIB)
 
-build: $(LIB)
+$(RS_TARGET): $(RS_SRC)
+	@cd $(RS_DIR) && cargo build >/dev/null 2>&1
 
-emacs: build ## Launch emacs with library loaded
-	@emacs -Q -L $(BUILD_DIR) \
-		--eval "(require 'tree-query)"
+$(RS_LIB): $(RS_TARGET)
+	@ln -s $(RS_TARGET) $(RS_LIB) || true
+tsq: $(RS_LIB)
+
+# emacs: build ## Launch emacs with library loaded
+# 	@emacs -Q -L $(RUST_BUILD) \
+# 		--eval "(require 'tsq)"

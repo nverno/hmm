@@ -1,1 +1,7 @@
 /target
+tmp.*
+/elisp-tree-sitter
+/emacs-*
+/tree-sitter
+/node_modules
+package-lock.json

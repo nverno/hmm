@@ -1,0 +1,14 @@
+{
+  "name": "tsq",
+  "version": "0.0.1",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "ts": "tree-sitter"
+  },
+  "author": "Noah Peart <noah.v.peart@gmail.com> (https://www.github.com/nverno)",
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.22.5"
+  }
+}
