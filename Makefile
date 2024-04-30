@@ -1,7 +1,7 @@
 TOP := $(patsubst %/,%,$(abspath $(dir $(lastword $(MAKEFILE_LIST)))))
 
 SRC       := $(wildcard $(TOP)/src/*.cc)
-TARGET    ?= target
+TARGET    ?= build/lib
 RS_DIR     = $(TOP)/tsq
 RS_SRC     = $(wildcard $(RS_DIR)/src/*.rs)
 RS_TARGET  = $(RS_DIR)/target/debug/libtsq.so
@@ -15,12 +15,15 @@ all:
 
 tsmeta: $(LIB)
 $(LIB): $(SRC)
-	$(RM) $@
-	mkdir -p target
-	$(CXX) -o $@ -Isrc $^ -shared -fPIC -Os
+	@cmake -B build && make -C build
+# $(RM) $@
+# mkdir -p target
+# $(CXX) -o $@ -Isrc $^ -shared -fPIC -Os -lstdc++fs
+# -I/home/noah/src/emacs/src/ -I/home/noah/src/emacs/lib
 
-emacs: tsmeta
-	@emacs -Q -L $(LOADPATH) --eval "(require '$(FEATURE))"
+.PHONY: emacs
+emacs: tsmeta  ## Launch emacs, require shared lib and run ielm
+	@emacs -Q -L $(LOADPATH) --eval "(require '$(FEATURE))" --eval "(ielm)"
 
 
 $(RS_TARGET): $(RS_SRC)
@@ -33,3 +36,9 @@ tsq: $(RS_LIB)
 # emacs: build ## Launch emacs with library loaded
 # 	@emacs -Q -L $(RUST_BUILD) \
 # 		--eval "(require 'tsq)"
+
+.PHONY: help
+help:  ## Show help for targets
+	@grep -E '^[/.%0-9a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) |     \
+	sort | awk                                                      \
+	'BEGIN {FS = ":[^:#]*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
