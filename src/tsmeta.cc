@@ -2,12 +2,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <string>
-#include <vector>
 #include <emacs-module.h>
+#include <filesystem>
+#include <string>
 #include <tree_sitter/api.h>
 
 namespace fs = std::filesystem;
@@ -27,44 +24,58 @@ static void tsmeta_symbol_to_c_name(std::string &s) {
   }
 }
 
-// load parser dynlib
+static void tsmeta_message(emacs_env *env, const char *message) {
+  for (auto i = 0; i < strlen(message); ++i) {
+    if (message[i] == '%')
+      return;
+  }
+  emacs_value data = env->make_string(env, message, strlen(message));
+  env->funcall(env, env->intern(env, "message"), 1, &data);
+}
+
+static void tsmeta_error(emacs_env *env, const char *message) {
+  emacs_value data = env->make_string(env, message, strlen(message));
+  env->non_local_exit_signal(
+      env, env->intern(env, "error"),
+      env->funcall(env, env->intern(env, "list"), 1, &data));
+}
+
+// Load parser dynlib
+// TODO(4/30/24): use Vtreesit_extra_load_path, or tree-sitter directory in
+// user-emacs-directory.
 static TSLanguage *tsmeta_load_language(emacs_env *env, const char *path) {
   const char *error;
   dynlib_handle_ptr handle = dlopen(path, RTLD_LAZY | RTLD_GLOBAL);
   error = dlerror();
   if (error != NULL) {
-    static const char message[] = "dlopen failed";
-    emacs_value data = env->make_string(env, message, strlen(message));
-    env->funcall(env, env->intern(env, "message"), 1, &data);
-    // std::cerr << "dlopen failed" << std::endl;
+    tsmeta_error(env, error);
     return NULL;
   }
 
-  TSLanguage *(*langfn)(void);
   fs::path p(path);
   auto lib_name = p.filename().stem().string();
   tsmeta_symbol_to_c_name(lib_name);
-  langfn = (TSLanguage * (*)(void)) dlsym(handle, lib_name.substr(3).c_str());
-  if (dlerror() != NULL) {
-    static const char message[] = "dlsym failed";
-    emacs_value data = env->make_string(env, message, strlen(message));
-    env->funcall(env, env->intern(env, "message"), 1, &data);
 
+  TSLanguage *(*langfn)(void);
+  langfn = (TSLanguage * (*)(void)) dlsym(handle, lib_name.substr(3).c_str());
+  error = dlerror();
+  if (error != NULL) {
+    tsmeta_error(env, error);
     return NULL;
   }
 
-  TSLanguage *lang = (*langfn)();
-  return lang;
+  return (*langfn)();
 }
 
 static int tsmeta_close(dynlib_handle_ptr h) { return dlclose(h) == 0; }
 
-static int string_bytes(emacs_env *env, emacs_value string) {
+static ptrdiff_t string_bytes(emacs_env *env, emacs_value string) {
   ptrdiff_t size = 0;
   env->copy_string_contents(env, string, NULL, &size);
   return size;
 }
 
+// Returns '((named nodes...) (anon nodes...) (fields...))
 emacs_value tsmeta_language_grammar(emacs_env *env, ptrdiff_t nargs,
                                     emacs_value args[], void *data) noexcept {
   ptrdiff_t sz = string_bytes(env, args[0]);
@@ -72,36 +83,58 @@ emacs_value tsmeta_language_grammar(emacs_env *env, ptrdiff_t nargs,
   env->copy_string_contents(env, args[0], (char *)p, &sz);
 
   TSLanguage *lang = tsmeta_load_language(env, (char *)p);
-
   if (lang == NULL) {
-    return env->make_integer(env, -1);
+    return NULL;
   }
 
   // Language symbols
-  // - ts_language_symbol_count
-  // - ts_language_symbol_type
-  // - ts_language_symbol_name
   uint32_t nsymbols = ts_language_symbol_count(lang);
-  std::vector<std::string> syms;
-  for (int i = 0; i < nsymbols; ++i) {
+  emacs_value named[nsymbols];
+  emacs_value anon[nsymbols];
+  size_t named_count = 0, anon_count;
+  for (auto i = 0; i < nsymbols; ++i) {
     TSSymbolType t = ts_language_symbol_type(lang, (TSSymbol)i);
+    // Hidden noes never returned from API
     if (t == TSSymbolTypeAuxiliary) {
-      // not used by the API
       continue;
     }
 
-    syms.push_back(ts_language_symbol_name(lang, (TSSymbol)i));
+    auto sym = ts_language_symbol_name(lang, (TSSymbol)i);
+    if (t == TSSymbolTypeRegular) {
+      named[named_count++] = env->make_string(env, sym, strlen(sym));
+    } else {
+      anon[anon_count++] = env->make_string(env, sym, strlen(sym));
+    }
   }
 
   // Language fields
-  // - ts_language_field_count
-  // - ts_language_field_name_for_id
+  // Note: ids start at 1
   uint32_t nfields = ts_language_field_count(lang);
-  for (int i = 0; i < nfields; ++i) {
+  emacs_value fields[nfields];
+  size_t field_count = 0;
+  for (auto i = 1; i <= nfields; ++i) {
     auto field = ts_language_field_name_for_id(lang, (TSFieldId)i);
+    fields[field_count++] = env->make_string(env, field, strlen(field));
   }
 
-  return env->make_integer(env, 0);
+  {
+    emacs_value args[3] = {
+        env->funcall(env, env->intern(env, "list"), named_count, named),
+        env->funcall(env, env->intern(env, "list"), anon_count, anon),
+        env->funcall(env, env->intern(env, "list"), field_count, fields),
+    };
+    return env->funcall(env, env->intern(env, "list"), 3, args);
+  }
+}
+
+static void define_function(emacs_env *env, const char *name,
+                            ptrdiff_t min_arity, ptrdiff_t max_arity,
+                            emacs_function func, const char *doc, void *data) {
+  emacs_value args[] = {
+      env->intern(env, name),
+      env->make_function(env, min_arity, max_arity, func, doc, data),
+  };
+  env->funcall(env, env->intern(env, "fset"), 2, args);
 }
 
 int emacs_module_init(struct emacs_runtime *runtime) {
@@ -111,28 +144,14 @@ int emacs_module_init(struct emacs_runtime *runtime) {
   emacs_env *env = runtime->get_environment(runtime);
 
   // Register symbols / functions
-  // Qnil = env->intern(env, "nil");
-  emacs_value Qfset = env->intern(env, "fset");
-
-  // emacs_value tsmeta_language_grammar =
-  //   env->make_global_ref(env, env->intern(env, "tsmeta-language-grammar"));
-
-  {
-    emacs_value func =
-        env->make_function(env, 1, 1, tsmeta_language_grammar,
-                           "Get symbols and fields defined by language.", NULL);
-    emacs_value sym = env->intern(env, "tsmeta-language-grammar");
-
-    // Set function cell
-    emacs_value args[] = {sym, func};
-    env->funcall(env, Qfset, 2, args);
-  }
+  define_function(env, "tsmeta-language-grammar", 1, 1, tsmeta_language_grammar,
+                  "Get symbols and fields defined by language.", NULL);
 
   // Provide feature
-  emacs_value Qfeat = env->intern(env, "tsmeta");
-  emacs_value Qprovide = env->intern(env, "provide");
-  emacs_value args[] = {Qfeat};
-  env->funcall(env, Qprovide, 1, args);
+  {
+    emacs_value args[] = {env->intern(env, "tsmeta")};
+    env->funcall(env, env->intern(env, "provide"), 1, args);
+  }
 
   return 0;
 }

@@ -13,16 +13,16 @@ LOADPATH  ?= $(TARGET)
 all:
 	@
 
-tsmeta: $(LIB)
+tsmeta: $(LIB) ## Build tsmeta.so library
 $(LIB): $(SRC)
 	@cmake -B build && make -C build
+
 # $(RM) $@
 # mkdir -p target
 # $(CXX) -o $@ -Isrc $^ -shared -fPIC -Os -lstdc++fs
-# -I/home/noah/src/emacs/src/ -I/home/noah/src/emacs/lib
 
 .PHONY: emacs
-emacs: tsmeta  ## Launch emacs, require shared lib and run ielm
+emacs: tsmeta ## Launch emacs, require shared lib and run ielm
 	@emacs -Q -L $(LOADPATH) --eval "(require '$(FEATURE))" --eval "(ielm)"
 
 
@@ -38,7 +38,7 @@ tsq: $(RS_LIB)
 # 		--eval "(require 'tsq)"
 
 .PHONY: help
-help:  ## Show help for targets
+help: ## Show help for targets
 	@grep -E '^[/.%0-9a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) |     \
-	sort | awk                                                      \
+	sort | awk \
 	'BEGIN {FS = ":[^:#]*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
